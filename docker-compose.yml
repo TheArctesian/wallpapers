@@ -1,0 +1,6 @@
+services:
+  dither:
+    build: .
+    volumes:
+      - ./raw:/input:ro
+      - ./framework13:/output
