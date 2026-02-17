@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -179,7 +180,26 @@ func ditherImage(src image.Image) *image.NRGBA {
 	return canvas
 }
 
+func convertHEIC(path string) (string, error) {
+	tmp := path + ".jpg"
+	cmd := exec.Command("heif-convert", "-q", "95", path, tmp)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("heif-convert: %v: %s", err, out)
+	}
+	return tmp, nil
+}
+
 func loadImage(path string) (image.Image, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".heic" {
+		tmp, err := convertHEIC(path)
+		if err != nil {
+			return nil, err
+		}
+		defer os.Remove(tmp)
+		path = tmp
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -210,7 +230,7 @@ func main() {
 	var files []string
 	for _, e := range entries {
 		ext := strings.ToLower(filepath.Ext(e.Name()))
-		if ext == ".jpeg" || ext == ".jpg" || ext == ".png" {
+		if ext == ".jpeg" || ext == ".jpg" || ext == ".png" || ext == ".heic" {
 			files = append(files, e.Name())
 		}
 	}

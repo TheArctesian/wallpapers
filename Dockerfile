@@ -6,5 +6,6 @@ RUN go mod tidy && go mod download
 RUN go build -o /dither main.go
 
 FROM alpine:3.21
+RUN apk add --no-cache libheif-tools
 COPY --from=build /dither /dither
 CMD ["/dither"]
