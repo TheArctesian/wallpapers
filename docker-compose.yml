@@ -4,3 +4,13 @@ services:
     volumes:
       - ./raw:/input:ro
       - ./framework13:/output
+
+  mbp14:
+    build: .
+    environment:
+      - SCREEN_W=3024
+      - SCREEN_H=1964
+      - PREFIX=mbp14
+    volumes:
+      - ./raw:/input:ro
+      - ./mbp14:/output

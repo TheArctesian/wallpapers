@@ -11,17 +11,35 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/image/draw"
 )
 
-const (
-	screenW     = 2256 // Framework 13 native resolution
-	screenH     = 1504
+var (
+	screenW     = envInt("SCREEN_W", 2256)
+	screenH     = envInt("SCREEN_H", 1504)
+	prefix      = envStr("PREFIX", "fm13")
 	scaleFactor = 0.50 // 50% — image fills half the screen, rest is border
 	noiseAmount = 0.05 // matches webapp
 )
+
+func envInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func envStr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 var nordPalette = [][3]uint8{
 	// Polar Night
@@ -238,7 +256,7 @@ func main() {
 
 	for _, fname := range files {
 		base := strings.TrimSuffix(fname, filepath.Ext(fname))
-		outName := "fm13_" + base + ".png"
+		outName := prefix + "_" + base + ".png"
 
 		if existing[outName] {
 			fmt.Printf("Skipping %s (already processed)\n", fname)
