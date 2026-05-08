@@ -1,5 +1,5 @@
 services:
-  dither:
+  fm13:
     build: .
     volumes:
       - ./raw:/input:ro

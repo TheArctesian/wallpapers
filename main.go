@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/jpeg"
 	"image/png"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -199,17 +201,48 @@ func ditherImage(src image.Image) *image.NRGBA {
 }
 
 func convertHEIC(path string) (string, error) {
-	tmp := path + ".jpg"
+	tmpFile, err := os.CreateTemp("", "heic-*.jpg")
+	if err != nil {
+		return "", err
+	}
+	tmp := tmpFile.Name()
+	tmpFile.Close()
+
 	cmd := exec.Command("heif-convert", "-q", "95", path, tmp)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		os.Remove(tmp)
 		return "", fmt.Errorf("heif-convert: %v: %s", err, out)
+	}
+	if info, err := os.Stat(tmp); err != nil || info.Size() == 0 {
+		os.Remove(tmp)
+		return "", fmt.Errorf("heif-convert produced no output for %s", path)
 	}
 	return tmp, nil
 }
 
+// isHEIF reports whether the first 12 bytes look like an ISO-BMFF HEIF/HEIC
+// container ("....ftyp<brand>" with a HEIF-family brand).
+func isHEIF(head []byte) bool {
+	if len(head) < 12 || !bytes.Equal(head[4:8], []byte("ftyp")) {
+		return false
+	}
+	switch string(head[8:12]) {
+	case "heic", "heix", "heim", "heis", "hevc", "hevx", "mif1", "msf1":
+		return true
+	}
+	return false
+}
+
 func loadImage(path string) (image.Image, error) {
-	ext := strings.ToLower(filepath.Ext(path))
-	if ext == ".heic" {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	head := make([]byte, 12)
+	n, _ := io.ReadFull(f, head)
+	f.Close()
+
+	if isHEIF(head[:n]) {
 		tmp, err := convertHEIC(path)
 		if err != nil {
 			return nil, err
@@ -218,13 +251,13 @@ func loadImage(path string) (image.Image, error) {
 		path = tmp
 	}
 
-	f, err := os.Open(path)
+	g, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer g.Close()
 
-	img, _, err := image.Decode(f)
+	img, _, err := image.Decode(g)
 	return img, err
 }
 
