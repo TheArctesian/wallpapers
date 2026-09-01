@@ -1,16 +1,15 @@
+# The ditherer alone — it has no idea what screens exist, so the geometry has
+# to be given explicitly. `./wallpapers generate` is the usual entry point;
+# this service is the escape hatch for rendering a size that is not attached:
+#
+#   SCREEN_W=3440 SCREEN_H=1440 docker compose run --rm dither
 services:
-  fm13:
-    build: .
-    volumes:
-      - ./raw:/input:ro
-      - ./framework13:/output
-
-  mbp14:
+  dither:
     build: .
     environment:
-      - SCREEN_W=3024
-      - SCREEN_H=1964
-      - PREFIX=mbp14
+      SCREEN_W: ${SCREEN_W:?set SCREEN_W}
+      SCREEN_H: ${SCREEN_H:?set SCREEN_H}
+      PREFIX: ${PREFIX:-}
     volumes:
       - ./raw:/input:ro
-      - ./mbp14:/output
+      - ./screens/${SCREEN_W:?}x${SCREEN_H:?}:/output

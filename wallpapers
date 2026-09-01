@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# Nord-dithered wallpapers, sized to whatever screens are actually attached.
+#
+#   ./wallpapers screens          show the detected screens
+#   ./wallpapers generate         render raw/ for every attached screen
+#   ./wallpapers set              apply a random wallpaper per screen
+#   ./wallpapers sync             generate, then set
+#
+# Screens are keyed by their post-rotation pixel geometry, so screens/2256x1504
+# holds landscape wallpapers for a Framework 13 and screens/1080x1920 holds
+# portrait ones for a monitor stood on its end. Attach a new screen, run
+# `sync`, and the right directory appears on its own.
+set -euo pipefail
+
+REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+export REPO_ROOT
+# shellcheck source=lib/common.sh
+source "$REPO_ROOT/lib/common.sh"
+# shellcheck source=lib/detect.sh
+source "$REPO_ROOT/lib/detect.sh"
+
+case "$(platform)" in
+  macos) source "$REPO_ROOT/lib/apply-macos.sh" ;;
+  linux) source "$REPO_ROOT/lib/apply-cosmic.sh" ;;
+esac
+
+usage() { sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+# read_screens populates SCREENS with one record per attached screen, or with
+# the geometries named on the command line (useful for rendering for a screen
+# that is not plugged in right now).
+read_screens() {
+  SCREENS=()
+  if [ "$#" -gt 0 ]; then
+    local geom
+    for geom in "$@"; do
+      [[ $geom =~ ^([0-9]+)x([0-9]+)$ ]] || die "not a geometry: $geom (expected e.g. 2256x1504)"
+      SCREENS+=("$geom"$'\t'"$geom"$'\t'"$geom"$'\t'"manual")
+    done
+  else
+    local line
+    while IFS= read -r line; do SCREENS+=("$line"); done < <(detect_screens)
+    [ "${#SCREENS[@]}" -gt 0 ] || die "no active screens detected"
+  fi
+}
+
+cmd_screens() {
+  read_screens "$@"
+  printf '%-12s  %-38s  %-9s  %-10s  %s\n' GEOMETRY SCREEN ROTATION WALLPAPERS ID
+  local id name geom rot dir count
+  for line in "${SCREENS[@]}"; do
+    IFS=$'\t' read -r id name geom rot <<<"$line"
+    dir="$SCREENS_DIR/$geom"
+    count=$(list_wallpapers "$dir" | wc -l | tr -d ' ')
+    case $rot in [0-9]*) rot="$rot deg" ;; esac
+    printf '%-12s  %-38s  %-9s  %-10s  %s\n' \
+      "$geom" "$name" "$rot" "$count" "$id"
+  done
+}
+
+# Rendering happens in the container by default, so the Go toolchain and
+# libheif stay off the host; only screen detection and wallpaper setting have
+# to run natively. `--native` builds and runs cmd/dither directly instead,
+# which is the way out when there is no working container runtime.
+RENDERER=${WALLPAPERS_RENDERER:-docker}
+NATIVE_BIN=
+
+setup_docker() {
+  need docker
+  docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable.
+  Start it (Docker Desktop needs one interactive first launch), or render
+  without a container: ./wallpapers generate --native"
+  info "building $IMAGE_TAG"
+  docker build -q -t "$IMAGE_TAG" "$REPO_ROOT" >/dev/null
+}
+
+setup_native() {
+  need go "or use the default container renderer"
+  NATIVE_BIN="${TMPDIR:-/tmp}/wallpapers-dither"
+  info "building cmd/dither"
+  ( cd "$REPO_ROOT" && go build -trimpath -o "$NATIVE_BIN" ./cmd/dither )
+}
+
+# render_geometry WxH — fill screens/WxH with wallpapers at that size.
+render_geometry() {
+  local geom=$1 out="$SCREENS_DIR/$1"
+  mkdir -p "$out"
+  case $RENDERER in
+    docker)
+      docker run --rm \
+        -e SCREEN_W="${geom%x*}" -e SCREEN_H="${geom#*x}" \
+        -v "$RAW_DIR:/input:ro" \
+        -v "$out:/output" \
+        "$IMAGE_TAG"
+      ;;
+    native)
+      SCREEN_W="${geom%x*}" SCREEN_H="${geom#*x}" \
+      INPUT_DIR="$RAW_DIR" OUTPUT_DIR="$out" "$NATIVE_BIN"
+      ;;
+  esac
+}
+
+cmd_generate() {
+  local geoms=()
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --native) RENDERER=native ;;
+      --docker) RENDERER=docker ;;
+      -*) die "unknown option: $1" ;;
+      *) geoms+=("$1") ;;
+    esac
+    shift
+  done
+
+  read_screens ${geoms[@]+"${geoms[@]}"}
+  [ -d "$RAW_DIR" ] || die "no raw/ directory to render from"
+  case $RENDERER in
+    docker) setup_docker ;;
+    native) setup_native ;;
+    *) die "unknown renderer: $RENDERER" ;;
+  esac
+
+  # Two screens of the same size share one directory; render it once.
+  local geom
+  for geom in $(for line in "${SCREENS[@]}"; do cut -f3 <<<"$line"; done | sort -u); do
+    render_geometry "$geom"
+  done
+}
+
+cmd_set() {
+  # Several shells starting at once would otherwise race to rewrite the same
+  # config. A lock holder is already picking fresh wallpapers, so just bail.
+  local lock="${TMPDIR:-/tmp}/wallpapers.lock"
+  mkdir "$lock" 2>/dev/null || exit 0
+  # shellcheck disable=SC2064
+  trap "rmdir '$lock' 2>/dev/null || true" EXIT
+
+  read_screens
+  local id name geom rot dir pick applied=0
+  for line in "${SCREENS[@]}"; do
+    IFS=$'\t' read -r id name geom rot <<<"$line"
+    dir="$SCREENS_DIR/$geom"
+    # sed rather than head: it drains sort, so no SIGPIPE for pipefail to trip on.
+    pick=$(list_wallpapers "$dir" | sort -R | sed -n '1p')
+    if [ -z "$pick" ]; then
+      warn "$name ($geom): nothing in screens/$geom — run './wallpapers generate'"
+      continue
+    fi
+    if apply_wallpaper "$id" "$name" "$geom" "$pick"; then
+      printf '%s (%s) -> %s\n' "$name" "$geom" "$(basename "$pick")"
+      applied=$((applied + 1))
+    else
+      warn "$name ($geom): failed to apply $pick"
+    fi
+  done
+
+  [ "$applied" -gt 0 ] || die "no wallpapers applied"
+  commit_wallpapers
+}
+
+case "${1:-sync}" in
+  screens)      shift; cmd_screens "$@" ;;
+  generate|gen) shift; cmd_generate "$@" ;;
+  set)          shift; cmd_set "$@" ;;
+  sync)         shift; cmd_generate "$@"; cmd_set ;;
+  -h|--help|help) usage ;;
+  *) usage >&2; die "unknown command: $1" ;;
+esac

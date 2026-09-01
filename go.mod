@@ -1,4 +1,4 @@
-module nord-dither
+module wallpapers
 
 go 1.23
 
